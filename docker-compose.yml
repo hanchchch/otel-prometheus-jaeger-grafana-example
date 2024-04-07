@@ -1,0 +1,86 @@
+version: "3.9"
+
+x-default-logging: &logging
+  driver: "json-file"
+  options:
+    max-size: "5m"
+    max-file: "2"
+
+networks:
+  default:
+    name: otel-example
+    driver: bridge
+
+services:
+  # Jaeger
+  jaeger:
+    image: jaegertracing/all-in-one
+    container_name: jaeger
+    command:
+      - "--query.base-path=/jaeger/ui"
+      - "--prometheus.server-url=http://prometheus:9090"
+      - "--prometheus.query.normalize-calls=true"
+      - "--prometheus.query.normalize-duration=true"
+    restart: unless-stopped
+    ports:
+      - 16686:16686 # Jaeger UI
+      - 4317
+    environment:
+      - METRICS_STORAGE_TYPE=prometheus
+    logging: *logging
+
+  # Grafana
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    restart: unless-stopped
+    volumes:
+      - ./grafana/grafana.ini:/etc/grafana/grafana.ini
+      - ./grafana/provisioning/:/etc/grafana/provisioning/
+    ports:
+      - 3000:3000
+    logging: *logging
+
+  # OpenTelemetry Collector
+  otelcol:
+    image: otel/opentelemetry-collector-contrib
+    container_name: otelcol
+    restart: unless-stopped
+    command:
+      [
+        "--config=/etc/otelcol-config.yml",
+        "--config=/etc/otelcol-config-extras.yml",
+      ]
+    volumes:
+      - ./otelcollector/otelcol-config.yml:/etc/otelcol-config.yml
+      - ./otelcollector/otelcol-config-extras.yml:/etc/otelcol-config-extras.yml
+    ports:
+      - 1888 # pprof extension
+      - 8888 # Prometheus metrics exposed by the Collector
+      - 8889 # Prometheus exporter metrics
+      - 4317 # OTLP gRPC receiver
+      - 4318:4318 # OTLP http receiver
+    depends_on:
+      - jaeger
+    logging: *logging
+
+  # Prometheus
+  prometheus:
+    image: quay.io/prometheus/prometheus
+    container_name: prometheus
+    command:
+      - --web.console.templates=/etc/prometheus/consoles
+      - --web.console.libraries=/etc/prometheus/console_libraries
+      - --storage.tsdb.retention.time=1h
+      - --config.file=/etc/prometheus/prometheus-config.yaml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+      - --web.route-prefix=/
+      - --enable-feature=exemplar-storage
+      - --enable-feature=otlp-write-receiver
+    volumes:
+      - ./prometheus/prometheus-config.yaml:/etc/prometheus/prometheus-config.yaml
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    logging: *logging
